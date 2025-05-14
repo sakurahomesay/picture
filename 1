@@ -1,0 +1,342 @@
+using System;
+using System.Drawing;
+using System.IO;
+using System.Windows.Forms;
+using System.Runtime.InteropServices;
+
+namespace ImageViewer
+{
+    public partial class MainForm : Form
+    {
+        private string[] imageFiles;
+        private int currentIndex = 0;
+        private float zoomFactor = 1.0f;
+        private int rotationAngle = 0;
+        private Point dragStartPosition;
+        private bool isDragging = false;
+        private bool isTopMost = false;
+        private int transparency = 255;
+
+        // 用于拖放的API
+        [DllImport("shell32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern void DragAcceptFiles(IntPtr hwnd, bool fAccept);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern int DragQueryFile(IntPtr hDrop, uint iFile, IntPtr lpszFile, int cch);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern void DragFinish(IntPtr hDrop);
+
+        public MainForm()
+        {
+            InitializeComponent();
+            InitializeComponents();
+            SetupDragDrop();
+        }
+
+        private void InitializeComponents()
+        {
+            // 主窗口设置
+            this.Text = "图片查看器";
+            this.WindowState = FormWindowState.Maximized;
+            this.DoubleBuffered = true;
+
+            // 图片显示控件
+            pictureBox = new PictureBox();
+            pictureBox.Dock = DockStyle.Fill;
+            pictureBox.SizeMode = PictureBoxSizeMode.Zoom;
+            pictureBox.BackColor = Color.Black;
+            pictureBox.MouseWheel += PictureBox_MouseWheel;
+            pictureBox.MouseDown += PictureBox_MouseDown;
+            pictureBox.MouseMove += PictureBox_MouseMove;
+            pictureBox.MouseUp += PictureBox_MouseUp;
+
+            // 菜单栏
+            MenuStrip menuStrip = new MenuStrip();
+            
+            // 文件菜单
+            ToolStripMenuItem fileMenu = new ToolStripMenuItem("文件(&F)");
+            fileMenu.DropDownItems.Add("打开(&O)", null, OpenFile_Click);
+            fileMenu.DropDownItems.Add(new ToolStripSeparator());
+            fileMenu.DropDownItems.Add("保存图片", null, SaveImage_Click);
+            fileMenu.DropDownItems.Add(new ToolStripSeparator());
+            fileMenu.DropDownItems.Add("退出(&X)", null, (s, e) => this.Close());
+            
+            // 视图菜单
+            ToolStripMenuItem viewMenu = new ToolStripMenuItem("视图(&V)");
+            viewMenu.DropDownItems.Add("放大", null, ZoomIn_Click);
+            viewMenu.DropDownItems.Add("缩小", null, ZoomOut_Click);
+            viewMenu.DropDownItems.Add("实际大小", null, ResetZoom_Click);
+            viewMenu.DropDownItems.Add(new ToolStripSeparator());
+            viewMenu.DropDownItems.Add("左旋转", null, RotateLeft_Click);
+            viewMenu.DropDownItems.Add("右旋转", null, RotateRight_Click);
+            viewMenu.DropDownItems.Add(new ToolStripSeparator());
+            viewMenu.DropDownItems.Add("窗口置顶", null, ToggleTopMost_Click);
+            viewMenu.DropDownItems.Add("窗口透明", null, ToggleTransparency_Click);
+
+            menuStrip.Items.Add(fileMenu);
+            menuStrip.Items.Add(viewMenu);
+
+            // 工具栏
+            ToolStrip toolStrip = new ToolStrip();
+            toolStrip.Items.Add(new ToolStripButton("打开", null, OpenFile_Click));
+            toolStrip.Items.Add(new ToolStripSeparator());
+            toolStrip.Items.Add(new ToolStripButton("放大", null, ZoomIn_Click));
+            toolStrip.Items.Add(new ToolStripButton("缩小", null, ZoomOut_Click));
+            toolStrip.Items.Add(new ToolStripButton("实际大小", null, ResetZoom_Click));
+            toolStrip.Items.Add(new ToolStripSeparator());
+            toolStrip.Items.Add(new ToolStripButton("左旋转", null, RotateLeft_Click));
+            toolStrip.Items.Add(new ToolStripButton("右旋转", null, RotateRight_Click));
+
+            // 添加到窗体
+            this.Controls.Add(pictureBox);
+            this.Controls.Add(toolStrip);
+            this.Controls.Add(menuStrip);
+
+            // 布局设置
+            menuStrip.Dock = DockStyle.Top;
+            toolStrip.Dock = DockStyle.Top;
+        }
+
+        private void SetupDragDrop()
+        {
+            this.AllowDrop = true;
+            this.DragEnter += MainForm_DragEnter;
+            this.DragDrop += MainForm_DragDrop;
+            DragAcceptFiles(this.Handle, true);
+        }
+
+        private void OpenFile_Click(object sender, EventArgs e)
+        {
+            OpenFileDialog openFileDialog = new OpenFileDialog();
+            openFileDialog.Filter = "图片文件|*.jpg;*.jpeg;*.png;*.bmp;*.gif|所有文件|*.*";
+            
+            if (openFileDialog.ShowDialog() == DialogResult.OK)
+            {
+                LoadImage(openFileDialog.FileName);
+            }
+        }
+
+        private void LoadImage(string filePath)
+        {
+            try
+            {
+                Image image = Image.FromFile(filePath);
+                pictureBox.Image = image;
+                zoomFactor = 1.0f;
+                rotationAngle = 0;
+                UpdateImageDisplay();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"无法加载图片: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void UpdateImageDisplay()
+        {
+            if (pictureBox.Image != null)
+            {
+                // 应用缩放和旋转
+                Bitmap bmp = new Bitmap(pictureBox.Image);
+                
+                // 旋转
+                if (rotationAngle != 0)
+                {
+                    bmp.RotateFlip(GetRotateFlipType());
+                }
+                
+                // 缩放
+                if (Math.Abs(zoomFactor - 1.0f) > 0.01f)
+                {
+                    int newWidth = (int)(bmp.Width * zoomFactor);
+                    int newHeight = (int)(bmp.Height * zoomFactor);
+                    Bitmap scaledBmp = new Bitmap(bmp, new Size(newWidth, newHeight));
+                    bmp.Dispose();
+                    bmp = scaledBmp;
+                }
+                
+                pictureBox.Image = bmp;
+            }
+        }
+
+        private RotateFlipType GetRotateFlipType()
+        {
+            switch (rotationAngle)
+            {
+                case 90: return RotateFlipType.Rotate90FlipNone;
+                case 180: return RotateFlipType.Rotate180FlipNone;
+                case 270: return RotateFlipType.Rotate270FlipNone;
+                default: return RotateFlipType.RotateNoneFlipNone;
+            }
+        }
+
+        private void ZoomIn_Click(object sender, EventArgs e)
+        {
+            zoomFactor += 0.1f;
+            if (zoomFactor > 3.0f) zoomFactor = 3.0f;
+            UpdateImageDisplay();
+        }
+
+        private void ZoomOut_Click(object sender, EventArgs e)
+        {
+            zoomFactor -= 0.1f;
+            if (zoomFactor < 0.1f) zoomFactor = 0.1f;
+            UpdateImageDisplay();
+        }
+
+        private void ResetZoom_Click(object sender, EventArgs e)
+        {
+            zoomFactor = 1.0f;
+            UpdateImageDisplay();
+        }
+
+        private void RotateLeft_Click(object sender, EventArgs e)
+        {
+            rotationAngle -= 90;
+            if (rotationAngle < 0) rotationAngle = 270;
+            UpdateImageDisplay();
+        }
+
+        private void RotateRight_Click(object sender, EventArgs e)
+        {
+            rotationAngle += 90;
+            if (rotationAngle >= 360) rotationAngle = 0;
+            UpdateImageDisplay();
+        }
+
+        private void ToggleTopMost_Click(object sender, EventArgs e)
+        {
+            isTopMost = !isTopMost;
+            this.TopMost = isTopMost;
+        }
+
+        private void ToggleTransparency_Click(object sender, EventArgs e)
+        {
+            transparency = transparency == 255 ? 125 : 255;
+            this.Opacity = transparency / 255.0;
+        }
+
+        private void SaveImage_Click(object sender, EventArgs e)
+        {
+            if (pictureBox.Image != null)
+            {
+                SaveFileDialog saveFileDialog = new SaveFileDialog();
+                saveFileDialog.Filter = "PNG 图片|*.png|JPEG 图片|*.jpg|BMP 图片|*.bmp";
+                saveFileDialog.FileName = $"image_{DateTime.Now:yyyyMMddHHmmss}";
+                
+                if (saveFileDialog.ShowDialog() == DialogResult.OK)
+                {
+                    try
+                    {
+                        pictureBox.Image.Save(saveFileDialog.FileName);
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"保存图片失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
+            }
+        }
+
+        private void PictureBox_MouseWheel(object sender, MouseEventArgs e)
+        {
+            if (Control.ModifierKeys == Keys.Control)
+            {
+                if (e.Delta > 0)
+                {
+                    ZoomIn_Click(sender, e);
+                }
+                else
+                {
+                    ZoomOut_Click(sender, e);
+                }
+            }
+        }
+
+        private void PictureBox_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                isDragging = true;
+                dragStartPosition = e.Location;
+                Cursor = Cursors.Hand;
+            }
+            else if (e.Button == MouseButtons.Right)
+            {
+                // 显示上下文菜单
+                ContextMenuStrip contextMenu = new ContextMenuStrip();
+                contextMenu.Items.Add("打开", null, OpenFile_Click);
+                contextMenu.Items.Add("保存", null, SaveImage_Click);
+                contextMenu.Items.Add(new ToolStripSeparator());
+                contextMenu.Items.Add("放大", null, ZoomIn_Click);
+                contextMenu.Items.Add("缩小", null, ZoomOut_Click);
+                contextMenu.Show(pictureBox, e.Location);
+            }
+        }
+
+        private void PictureBox_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (isDragging && pictureBox.Image != null)
+            {
+                int deltaX = e.X - dragStartPosition.X;
+                int deltaY = e.Y - dragStartPosition.Y;
+                
+                if (pictureBox.Dock == DockStyle.None)
+                {
+                    pictureBox.Left += deltaX;
+                    pictureBox.Top += deltaY;
+                }
+            }
+        }
+
+        private void PictureBox_MouseUp(object sender, MouseEventArgs e)
+        {
+            isDragging = false;
+            Cursor = Cursors.Default;
+        }
+
+        private void MainForm_DragEnter(object sender, DragEventArgs e)
+        {
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                e.Effect = DragDropEffects.Copy;
+            }
+        }
+
+        private void MainForm_DragDrop(object sender, DragEventArgs e)
+        {
+            string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
+            if (files.Length > 0)
+            {
+                LoadImage(files[0]);
+            }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_DROPFILES = 0x233;
+            
+            if (m.Msg == WM_DROPFILES)
+            {
+                IntPtr hDrop = m.WParam;
+                uint fileCount = DragQueryFile(hDrop, 0xFFFFFFFF, IntPtr.Zero, 0);
+                
+                if (fileCount > 0)
+                {
+                    IntPtr buffer = Marshal.AllocHGlobal(260);
+                    DragQueryFile(hDrop, 0, buffer, 260);
+                    string filePath = Marshal.PtrToStringAuto(buffer);
+                    Marshal.FreeHGlobal(buffer);
+                    
+                    LoadImage(filePath);
+                }
+                
+                DragFinish(hDrop);
+                return;
+            }
+            
+            base.WndProc(ref m);
+        }
+    }
+}
