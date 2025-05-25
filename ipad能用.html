@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- 修改页面标题 -->
+    <title>速写播放器</title>
+    <style>
+        #counter-btn {
+            min-width: 80px;
+            pointer-events: none;
+        }
+    </style>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            touch-action: pan-y;
+        }
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        #image-view {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            transform: scaleX(1);
+            transition: transform 0.3s;
+        }
+        .controls {
+            position: fixed;
+            bottom: 20px;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            transition: opacity 0.3s ease, visibility 0.3s;
+        }
+        .controls.hidden {
+            opacity: 0;
+            visibility: hidden;
+        }
+        button {
+            background: none;
+            border: 2px solid #fff;
+            color: #fff;
+            padding: 12px;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            cursor: pointer;
+            backdrop-filter: blur(5px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #timer {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            color: #fff;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 0 0 5px rgba(0,0,0,0.5);
+            z-index: 2;
+        }
+        #time-selector {
+            position: fixed;
+            top: 15px;
+            right: 15px;
+            padding: 8px;
+            background: rgba(255,255,255,0.9);
+            border-radius: 4px;
+            z-index: 3;
+        }
+        #file-input {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <input type="file" id="file-input" accept="image/*" multiple>
+    <select id="time-selector">
+        <option value="30">30秒</option>
+        <option value="60">1分钟</option>
+        <option value="120">2分钟</option>
+        <option value="180">3分钟</option>
+        <option value="360">6分钟</option>
+        <option value="600">10分钟</option>
+        <option value="900">15分钟</option>
+        <option value="1800">30分钟</option>
+    </select>
+    
+    <div id="container">
+        <div id="timer">00:00</div>
+        <img id="image-view">
+        <div class="controls hidden">
+            <button onclick="document.getElementById('file-input').click()">📂</button>
+            <button onclick="flipImage()">↔</button>
+            <button onclick="togglePlay()">⏯</button>
+            <button id="counter-btn">1/0</button>
+        </div>
+    </div>
+
+    <!-- 保持所有功能代码不变 -->
+    <script>
+        function updateCounter() {
+            const btn = document.getElementById('counter-btn');
+            btn.textContent = `${currentIndex + 1}/${images.length}`;
+        }
+
+        document.getElementById('file-input').addEventListener('change', function(e) {
+            const files = Array.from(e.target.files);
+            images = [];
+            files.forEach(file => {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    images.push(event.target.result);
+                    if(images.length === files.length) {
+                        startSlideShow();
+                        updateCounter();
+                    }
+                };
+                reader.readAsDataURL(file);
+            });
+        });
+
+        function changeImage(step) {
+            currentIndex = (currentIndex + step + images.length) % images.length;
+            remainingTime = parseInt(document.getElementById('time-selector').value);
+            isFlipped = false;
+            updateImageDisplay();
+            updateCounter();
+            resetTimer();
+        }
+
+        let images = [];
+        let currentIndex = 0;
+        let timer = null;
+        let remainingTime = 0;
+        let isPlaying = true;
+        let isFlipped = false;
+        let hideTimeout = null;
+        const controls = document.querySelector('.controls');
+        const container = document.getElementById('container');
+
+        controls.classList.add('hidden');
+
+        container.addEventListener('click', function(e) {
+            if(e.target === container || e.target === document.getElementById('image-view')) {
+                showControls();
+            }
+        });
+
+        function showControls() {
+            controls.classList.remove('hidden');
+            clearTimeout(hideTimeout);
+            hideTimeout = setTimeout(() => {
+                controls.classList.add('hidden');
+            }, 3000);
+        }
+
+        document.getElementById('time-selector').addEventListener('change', () => {
+            if(images.length > 0) startSlideShow();
+        });
+
+        function startSlideShow() {
+            clearInterval(timer);
+            currentIndex = 0;
+            isFlipped = false;
+            remainingTime = parseInt(document.getElementById('time-selector').value);
+            updateImageDisplay();
+            updateCounter();
+            startTimer();
+        }
+
+        function updateImageDisplay() {
+            const img = document.getElementById('image-view');
+            img.src = images[currentIndex];
+            img.style.transform = isFlipped ? 'scaleX(-1)' : 'scaleX(1)';
+        }
+
+        function startTimer() {
+            isPlaying = true;
+            controls.classList.add('hidden');
+            timer = setInterval(() => {
+                if(remainingTime <= 0) {
+                    changeImage(1);
+                    remainingTime = parseInt(document.getElementById('time-selector').value);
+                } else {
+                    remainingTime--;
+                }
+                updateTimerDisplay();
+            }, 1000);
+        }
+
+        function updateTimerDisplay() {
+            const minutes = Math.floor(remainingTime / 60);
+            const seconds = remainingTime % 60;
+            document.getElementById('timer').textContent = 
+                `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }
+
+        function flipImage() {
+            isFlipped = !isFlipped;
+            updateImageDisplay();
+        }
+
+        function togglePlay() {
+            isPlaying = !isPlaying;
+            if(isPlaying) {
+                startTimer();
+                controls.classList.add('hidden');
+            } else {
+                clearInterval(timer);
+                showControls();
+            }
+        }
+
+        function resetTimer() {
+            clearInterval(timer);
+            if(isPlaying) startTimer();
+        }
+
+        document.querySelectorAll('button').forEach(button => {
+            button.addEventListener('click', (e) => {
+                if(button.id !== 'counter-btn') {
+                    e.stopPropagation();
+                    showControls();
+                }
+            });
+        });
+
+        let touchStartX = 0;
+        const SWIPE_THRESHOLD = 30;
+
+        container.addEventListener('touchstart', e => {
+            touchStartX = e.touches[0].clientX;
+            showControls();
+        });
+
+        container.addEventListener('touchend', e => {
+            const touchEndX = e.changedTouches[0].clientX;
+            const deltaX = touchEndX - touchStartX;
+
+            if (Math.abs(deltaX) > SWIPE_THRESHOLD) {
+                if (deltaX > 0) {
+                    changeImage(-1);
+                } else {
+                    changeImage(1);
+                }
+            }
+        });
+    </script>
+</body>
+</html>
